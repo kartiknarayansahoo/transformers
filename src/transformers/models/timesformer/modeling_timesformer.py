@@ -84,6 +84,10 @@ class TimesformerEmbeddings(nn.Module):
         self.num_patches = self.patch_embeddings.num_patches
 
         # Positional Embeddings
+        if self.previous_state == None:
+            self.previous_state = torch.zeros_like(1, 1, embed_dim)
+        else:
+            self.previous_state = self.previous_state
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.position_embeddings = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -98,7 +102,8 @@ class TimesformerEmbeddings(nn.Module):
         embeddings, num_frames, patch_width = self.patch_embeddings(pixel_values)
 
         cls_tokens = self.cls_token.expand(embeddings.size(0), -1, -1)
-        embeddings = torch.cat((cls_tokens, embeddings), dim=1)
+        previous_state = self.previous_state.expand(embeddings.size(0), -1, -1)
+        embeddings = torch.cat((cls_tokens, previous_state, embeddings), dim=1)
 
         # resizing the positional embeddings in case they don't match the input at inference
         if embeddings.size(1) != self.position_embeddings.size(1):
@@ -141,7 +146,7 @@ class TimesformerEmbeddings(nn.Module):
             embeddings = embeddings.view(batch_size, patch_height, num_frames, patch_width).reshape(
                 batch_size, patch_height * num_frames, patch_width
             )
-            embeddings = torch.cat((cls_tokens, embeddings), dim=1)
+            embeddings = torch.cat((cls_tokens, previous_state, embeddings), dim=1)
 
         return embeddings
 
@@ -295,7 +300,7 @@ class TimesformerLayer(nn.Module):
         attention_type = config.attention_type
 
         drop_path_rates = [
-            x.item() for x in torch.linspace(0, config.drop_path_rate, config.num_hidden_layers, device="cpu")
+            x.item() for x in torch.linspace(0, config.drop_path_rate, config.num_hidden_layers)
         ]  # stochastic depth decay rule
         drop_path_rate = drop_path_rates[layer_index]
 
@@ -677,6 +682,7 @@ class TimesformerForVideoClassification(TimesformerPreTrainedModel):
         self,
         pixel_values: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
+        prev_state: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -769,11 +775,13 @@ class TimesformerForVideoClassification(TimesformerPreTrainedModel):
 
         outputs = self.timesformer(
             pixel_values,
+            prev_state,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
+        # sequence_output : class token hidden state 
         sequence_output = outputs[0][:, 0]
 
         logits = self.classifier(sequence_output)
@@ -810,7 +818,8 @@ class TimesformerForVideoClassification(TimesformerPreTrainedModel):
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-        )
+        ), sequence_output
+        # sequence_output is prev_state_token
 
 
 __all__ = ["TimesformerModel", "TimesformerForVideoClassification", "TimesformerPreTrainedModel"]
