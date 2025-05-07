@@ -13,6 +13,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
+## Building the code into `.whl` and `.tar.gz` file
+```bash
+pip install build
+python -m build 
+```
+- The built files will be present in `dist` folder
 
 <p align="center">
   <picture>
