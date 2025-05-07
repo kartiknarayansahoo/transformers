@@ -46,19 +46,24 @@ class TimesformerPatchEmbeddings(nn.Module):
         image_size = config.image_size
         patch_size = config.patch_size
 
-        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
-        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
+        image_size = image_size if isinstance(
+            image_size, collections.abc.Iterable) else (image_size, image_size)
+        patch_size = patch_size if isinstance(
+            patch_size, collections.abc.Iterable) else (patch_size, patch_size)
 
-        num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
+        num_patches = (image_size[1] // patch_size[1]) * \
+            (image_size[0] // patch_size[0])
         self.image_size = image_size
         self.patch_size = patch_size
         self.num_patches = num_patches
 
-        self.projection = nn.Conv2d(config.num_channels, config.hidden_size, kernel_size=patch_size, stride=patch_size)
+        self.projection = nn.Conv2d(
+            config.num_channels, config.hidden_size, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, pixel_values):
         batch_size, num_frames, num_channels, height, width = pixel_values.shape
-        pixel_values = pixel_values.reshape(batch_size * num_frames, num_channels, height, width)
+        pixel_values = pixel_values.reshape(
+            batch_size * num_frames, num_channels, height, width)
 
         embeddings = self.projection(pixel_values)
         patch_width = embeddings.size(-1)
@@ -84,37 +89,45 @@ class TimesformerEmbeddings(nn.Module):
         self.num_patches = self.patch_embeddings.num_patches
 
         # Positional Embeddings
-        if self.previous_state == None:
-            self.previous_state = torch.zeros_like(1, 1, embed_dim)
-        else:
-            self.previous_state = self.previous_state
+        self.prev_state = torch.zeros_like(1, 1, embed_dim)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.position_embeddings = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
+        self.position_embeddings = nn.Parameter(
+            torch.zeros(1, self.num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
         if attention_type != "space_only":
-            self.time_embeddings = nn.Parameter(torch.zeros(1, num_frames, embed_dim))
+            self.time_embeddings = nn.Parameter(
+                torch.zeros(1, num_frames, embed_dim))
             self.time_drop = nn.Dropout(p=drop_rate)
 
-    def forward(self, pixel_values):
+    def forward(self, pixel_values, prev_state):
         batch_size = pixel_values.shape[0]
 
         # create patch embeddings
-        embeddings, num_frames, patch_width = self.patch_embeddings(pixel_values)
+        embeddings, num_frames, patch_width = self.patch_embeddings(
+            pixel_values)
 
         cls_tokens = self.cls_token.expand(embeddings.size(0), -1, -1)
-        previous_state = self.previous_state.expand(embeddings.size(0), -1, -1)
-        embeddings = torch.cat((cls_tokens, previous_state, embeddings), dim=1)
+        if prev_state == None:
+            prev_state = self.prev_state.expand(
+                embeddings.size(0), -1, -1)
+        else:
+            prev_state = prev_state
+        embeddings = torch.cat((cls_tokens, prev_state, embeddings), dim=1)
 
         # resizing the positional embeddings in case they don't match the input at inference
         if embeddings.size(1) != self.position_embeddings.size(1):
             position_embeddings = self.position_embeddings
-            cls_pos_embed = position_embeddings[0, 0, :].unsqueeze(0).unsqueeze(1)
-            other_pos_embed = position_embeddings[0, 1:, :].unsqueeze(0).transpose(1, 2)
+            cls_pos_embed = position_embeddings[0, 0, :].unsqueeze(
+                0).unsqueeze(1)
+            other_pos_embed = position_embeddings[0, 1:, :].unsqueeze(
+                0).transpose(1, 2)
             patch_num = int(other_pos_embed.size(2) ** 0.5)
             patch_height = embeddings.size(1) // patch_width
-            other_pos_embed = other_pos_embed.reshape(1, embeddings.size(2), patch_num, patch_num)
+            other_pos_embed = other_pos_embed.reshape(
+                1, embeddings.size(2), patch_num, patch_num)
             new_pos_embed = nn.functional.interpolate(
-                other_pos_embed, size=(patch_height, patch_width), mode="nearest"
+                other_pos_embed, size=(
+                    patch_height, patch_width), mode="nearest"
             )
             new_pos_embed = new_pos_embed.flatten(2)
             new_pos_embed = new_pos_embed.transpose(1, 2)
@@ -130,14 +143,16 @@ class TimesformerEmbeddings(nn.Module):
             embeddings = embeddings[:, 1:]
             _, patch_height, patch_width = embeddings.shape
             embeddings = (
-                embeddings.reshape(batch_size, num_frames, patch_height, patch_width)
+                embeddings.reshape(batch_size, num_frames,
+                                   patch_height, patch_width)
                 .permute(0, 2, 1, 3)
                 .reshape(batch_size * patch_height, num_frames, patch_width)
             )
             # Resizing time embeddings in case they don't match
             if num_frames != self.time_embeddings.size(1):
                 time_embeddings = self.time_embeddings.transpose(1, 2)
-                new_time_embeddings = nn.functional.interpolate(time_embeddings, size=(num_frames), mode="nearest")
+                new_time_embeddings = nn.functional.interpolate(
+                    time_embeddings, size=(num_frames), mode="nearest")
                 new_time_embeddings = new_time_embeddings.transpose(1, 2)
                 embeddings = embeddings + new_time_embeddings
             else:
@@ -146,7 +161,8 @@ class TimesformerEmbeddings(nn.Module):
             embeddings = embeddings.view(batch_size, patch_height, num_frames, patch_width).reshape(
                 batch_size, patch_height * num_frames, patch_width
             )
-            embeddings = torch.cat((cls_tokens, previous_state, embeddings), dim=1)
+            embeddings = torch.cat(
+                (cls_tokens, prev_state, embeddings), dim=1)
 
         return embeddings
 
@@ -165,8 +181,10 @@ def drop_path(input: torch.Tensor, drop_prob: float = 0.0, training: bool = Fals
     if drop_prob == 0.0 or not training:
         return input
     keep_prob = 1 - drop_prob
-    shape = (input.shape[0],) + (1,) * (input.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
-    random_tensor = keep_prob + torch.rand(shape, dtype=input.dtype, device=input.device)
+    # work with diff dim tensors, not just 2D ConvNets
+    shape = (input.shape[0],) + (1,) * (input.ndim - 1)
+    random_tensor = keep_prob + \
+        torch.rand(shape, dtype=input.dtype, device=input.device)
     random_tensor.floor_()  # binarize
     output = input.div(keep_prob) * random_tensor
     return output
@@ -199,7 +217,8 @@ class TimesformerSelfAttention(nn.Module):
         self.num_heads = num_heads
         head_dim = config.hidden_size // num_heads
         self.scale = head_dim**-0.5
-        self.qkv = nn.Linear(config.hidden_size, config.hidden_size * 3, bias=qkv_bias)
+        self.qkv = nn.Linear(config.hidden_size,
+                             config.hidden_size * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attention_dropout_prob)
 
     def forward(self, hidden_states, output_attentions: bool = False):
@@ -215,9 +234,11 @@ class TimesformerSelfAttention(nn.Module):
         attention_probs = attention_probs.softmax(dim=-1)
         attention_probs = self.attn_drop(attention_probs)
 
-        context_layer = (attention_probs @ value).transpose(1, 2).reshape(batch_size, hidden_size, num_channels)
+        context_layer = (attention_probs @ value).transpose(1,
+                                                            2).reshape(batch_size, hidden_size, num_channels)
 
-        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
+        outputs = (context_layer, attention_probs) if output_attentions else (
+            context_layer,)
 
         return outputs
 
@@ -255,7 +276,8 @@ class TimeSformerAttention(nn.Module):
 
         attention_output = self.output(self_outputs[0])
 
-        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
+        # add attentions if we output them
+        outputs = (attention_output,) + self_outputs[1:]
         return outputs
 
 
@@ -304,23 +326,29 @@ class TimesformerLayer(nn.Module):
         ]  # stochastic depth decay rule
         drop_path_rate = drop_path_rates[layer_index]
 
-        self.drop_path = TimeSformerDropPath(drop_path_rate) if drop_path_rate > 0.0 else nn.Identity()
+        self.drop_path = TimeSformerDropPath(
+            drop_path_rate) if drop_path_rate > 0.0 else nn.Identity()
         self.attention = TimeSformerAttention(config)
         self.intermediate = TimesformerIntermediate(config)
         self.output = TimesformerOutput(config)
-        self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.layernorm_before = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps)
+        self.layernorm_after = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps)
 
         self.config = config
         self.attention_type = attention_type
         if attention_type not in ["divided_space_time", "space_only", "joint_space_time"]:
-            raise ValueError("Unknown attention type: {}".format(attention_type))
+            raise ValueError(
+                "Unknown attention type: {}".format(attention_type))
 
         # Temporal Attention Parameters
         if self.attention_type == "divided_space_time":
-            self.temporal_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+            self.temporal_layernorm = nn.LayerNorm(
+                config.hidden_size, eps=config.layer_norm_eps)
             self.temporal_attention = TimeSformerAttention(config)
-            self.temporal_dense = nn.Linear(config.hidden_size, config.hidden_size)
+            self.temporal_dense = nn.Linear(
+                config.hidden_size, config.hidden_size)
 
     def forward(self, hidden_states: torch.Tensor, output_attentions: bool = False):
         num_frames = self.config.num_frames
@@ -334,7 +362,8 @@ class TimesformerLayer(nn.Module):
                 self.layernorm_before(hidden_states), output_attentions=output_attentions
             )
             attention_output = self_attention_outputs[0]
-            outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
+            # add self attentions if we output attention weights
+            outputs = self_attention_outputs[1:]
 
             hidden_states = hidden_states + self.drop_path(attention_output)
 
@@ -351,7 +380,8 @@ class TimesformerLayer(nn.Module):
             # Temporal
             temporal_embedding = hidden_states[:, 1:, :]
             temporal_embedding = temporal_embedding.reshape(
-                batch_size, num_patch_height, num_patch_width, num_frames, temporal_embedding.shape[2]
+                batch_size, num_patch_height, num_patch_width, num_frames, temporal_embedding.shape[
+                    2]
             ).reshape(batch_size * num_patch_height * num_patch_width, num_frames, temporal_embedding.shape[2])
 
             temporal_attention_outputs = self.temporal_attention(
@@ -362,7 +392,8 @@ class TimesformerLayer(nn.Module):
             residual_temporal = self.drop_path(attention_output)
 
             residual_temporal = residual_temporal.reshape(
-                batch_size, num_patch_height, num_patch_width, num_frames, residual_temporal.shape[2]
+                batch_size, num_patch_height, num_patch_width, num_frames, residual_temporal.shape[
+                    2]
             ).reshape(batch_size, num_patch_height * num_patch_width * num_frames, residual_temporal.shape[2])
             residual_temporal = self.temporal_dense(residual_temporal)
             temporal_embedding = hidden_states[:, 1:, :] + residual_temporal
@@ -370,11 +401,13 @@ class TimesformerLayer(nn.Module):
             # Spatial
             init_cls_token = hidden_states[:, 0, :].unsqueeze(1)
             cls_token = init_cls_token.repeat(1, num_frames, 1)
-            cls_token = cls_token.reshape(batch_size * num_frames, 1, cls_token.shape[2])
+            cls_token = cls_token.reshape(
+                batch_size * num_frames, 1, cls_token.shape[2])
             spatial_embedding = temporal_embedding
             spatial_embedding = (
                 spatial_embedding.reshape(
-                    batch_size, num_patch_height, num_patch_width, num_frames, spatial_embedding.shape[2]
+                    batch_size, num_patch_height, num_patch_width, num_frames, spatial_embedding.shape[
+                        2]
                 )
                 .permute(0, 3, 1, 2, 4)
                 .reshape(batch_size * num_frames, num_patch_height * num_patch_width, spatial_embedding.shape[2])
@@ -385,18 +418,22 @@ class TimesformerLayer(nn.Module):
                 self.layernorm_before(spatial_embedding), output_attentions=output_attentions
             )
             attention_output = spatial_attention_outputs[0]
-            outputs = spatial_attention_outputs[1:]  # add self attentions if we output attention weights
+            # add self attentions if we output attention weights
+            outputs = spatial_attention_outputs[1:]
 
             residual_spatial = self.drop_path(attention_output)
 
             # Taking care of CLS token
             cls_token = residual_spatial[:, 0, :]
-            cls_token = cls_token.reshape(batch_size, num_frames, cls_token.shape[1])
-            cls_token = torch.mean(cls_token, 1, True)  # averaging for every frame
+            cls_token = cls_token.reshape(
+                batch_size, num_frames, cls_token.shape[1])
+            # averaging for every frame
+            cls_token = torch.mean(cls_token, 1, True)
             residual_spatial = residual_spatial[:, 1:, :]
             residual_spatial = (
                 residual_spatial.reshape(
-                    batch_size, num_frames, num_patch_height, num_patch_width, residual_spatial.shape[2]
+                    batch_size, num_frames, num_patch_height, num_patch_width, residual_spatial.shape[
+                        2]
                 )
                 .permute(0, 2, 3, 1, 4)
                 .reshape(batch_size, num_patch_height * num_patch_width * num_frames, residual_spatial.shape[2])
@@ -405,7 +442,8 @@ class TimesformerLayer(nn.Module):
             hidden_states = temporal_embedding
 
             # Mlp
-            hidden_states = torch.cat((init_cls_token, hidden_states), 1) + torch.cat((cls_token, residual), 1)
+            hidden_states = torch.cat(
+                (init_cls_token, hidden_states), 1) + torch.cat((cls_token, residual), 1)
             layer_output = self.layernorm_after(hidden_states)
             layer_output = self.intermediate(layer_output)
             layer_output = self.output(layer_output)
@@ -420,7 +458,8 @@ class TimesformerEncoder(nn.Module):
     def __init__(self, config: TimesformerConfig) -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([TimesformerLayer(config, ind) for ind in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList(
+            [TimesformerLayer(config, ind) for ind in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
 
     def forward(
@@ -477,15 +516,18 @@ class TimesformerPreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Conv2d)):
-            nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
+            nn.init.trunc_normal_(
+                module.weight, std=self.config.initializer_range)
             if module.bias is not None:
                 nn.init.constant_(module.bias, 0)
         elif isinstance(module, nn.LayerNorm):
             nn.init.constant_(module.bias, 0)
             nn.init.constant_(module.weight, 1.0)
         elif isinstance(module, TimesformerEmbeddings):
-            nn.init.trunc_normal_(module.cls_token, std=self.config.initializer_range)
-            nn.init.trunc_normal_(module.position_embeddings, std=self.config.initializer_range)
+            nn.init.trunc_normal_(
+                module.cls_token, std=self.config.initializer_range)
+            nn.init.trunc_normal_(module.position_embeddings,
+                                  std=self.config.initializer_range)
             module.patch_embeddings.apply(self._init_weights)
 
 
@@ -529,7 +571,8 @@ class TimesformerModel(TimesformerPreTrainedModel):
         self.embeddings = TimesformerEmbeddings(config)
         self.encoder = TimesformerEncoder(config)
 
-        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.layernorm = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -550,6 +593,7 @@ class TimesformerModel(TimesformerPreTrainedModel):
     def forward(
         self,
         pixel_values: torch.FloatTensor,
+        prev_state: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -636,7 +680,7 @@ class TimesformerModel(TimesformerPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        embedding_output = self.embeddings(pixel_values)
+        embedding_output = self.embeddings(pixel_values, prev_state)
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -671,7 +715,8 @@ class TimesformerForVideoClassification(TimesformerPreTrainedModel):
         self.timesformer = TimesformerModel(config)
 
         # Classifier head
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
+        self.classifier = nn.Linear(
+            config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -781,7 +826,7 @@ class TimesformerForVideoClassification(TimesformerPreTrainedModel):
             return_dict=return_dict,
         )
 
-        # sequence_output : class token hidden state 
+        # sequence_output : class token hidden state
         sequence_output = outputs[0][:, 0]
 
         logits = self.classifier(sequence_output)
@@ -804,7 +849,8 @@ class TimesformerForVideoClassification(TimesformerPreTrainedModel):
                     loss = loss_fct(logits, labels)
             elif self.config.problem_type == "single_label_classification":
                 loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                loss = loss_fct(
+                    logits.view(-1, self.num_labels), labels.view(-1))
             elif self.config.problem_type == "multi_label_classification":
                 loss_fct = BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
@@ -822,4 +868,5 @@ class TimesformerForVideoClassification(TimesformerPreTrainedModel):
         # sequence_output is prev_state_token
 
 
-__all__ = ["TimesformerModel", "TimesformerForVideoClassification", "TimesformerPreTrainedModel"]
+__all__ = ["TimesformerModel", "TimesformerForVideoClassification",
+           "TimesformerPreTrainedModel"]
